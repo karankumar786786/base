@@ -1,0 +1,24 @@
+services:
+  postgress:
+    image: postgres:17-alpine
+    container_name: base
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: base
+    volumes:
+      - base:/var/lib/postgres/data
+  
+  redis:
+    image: redis/redis-stack
+    container_name: base-cache
+    ports:
+      - "6379:6379"
+      - "8001:8001"
+    volumes:
+      - redis_data:/data:rw
+volumes:
+  base:
+  redis_data:
