@@ -1,5 +1,5 @@
 import { OnGatewayConnection, OnGatewayDisconnect, OnGatewayInit, SubscribeMessage, WebSocketGateway, WebSocketServer } from '@nestjs/websockets';
-import {Logger, OnModuleInit} from "@nestjs/common";
+import { Logger, OnModuleInit, OnApplicationShutdown, Inject } from "@nestjs/common";
 import { Server, Socket } from 'socket.io';
 import { CacheService } from 'src/cache/cache.service';
 import { JwtService } from 'src/util/jwt.service';
@@ -8,24 +8,44 @@ import { blackListTokenCache, tokenPayloadSchema } from 'src/auth/auth.service';
 import { HmacService } from 'src/util/hmac.service';
 import { InvalidTokenException } from 'src/filtures/invalidTokenException.filter';
 import {z} from "zod";
+import { AppVariablesService } from 'src/util/appVariables.service';
+import { ClientProxy } from '@nestjs/microservices';
 
 @WebSocketGateway({
   cors:{
     origin: '*'
   }
 })
-export class ChatGateway implements OnGatewayInit,OnGatewayConnection,OnGatewayDisconnect{
+export class ChatGateway implements OnGatewayInit,OnGatewayConnection,OnGatewayDisconnect,OnApplicationShutdown{
   constructor(
     private readonly cacheService:CacheService,
     private readonly jwtService:JwtService,
     private readonly hmacService:HmacService,
+    private readonly appVariables:AppVariablesService,
+    @Inject('NATS') private readonly nats:ClientProxy
   ) {}
   handleConnection(client: Socket, ...args: any[]) {
-    const socketId = client.id;
-
+    this.logger.log(`Client connected: ${client.id}`);
   }
-  handleDisconnect(client: Socket) {
-    throw new Error('Method not implemented.');
+  async handleDisconnect(client: Socket) {
+    this.logger.log(`Client disconnected: ${client.id}`);
+    if (client.userId) {
+      try {
+        await this.cacheService.del(`socket:${client.userId}`);
+        this.logger.log(`Removed socket cache entry for user: ${client.userId}`);
+      } catch (err: any) {
+        this.logger.error(`Failed to delete socket cache for user ${client.userId}: ${err.message}`);
+      }
+    }
+  }
+  async onApplicationShutdown(signal?: string) {
+    this.logger.log('Closing WebSocket Gateway server and disconnecting active clients...');
+    if (this.server) {
+      const sockets = await this.server.fetchSockets();
+      for (const socket of sockets) {
+        socket.disconnect(true);
+      }
+    }
   }
   afterInit(server:Server) {
     this.logger.log('WebSocket Gateway has been initialized successfully.');
@@ -56,7 +76,7 @@ export class ChatGateway implements OnGatewayInit,OnGatewayConnection,OnGatewayD
         const socketCacheSchema = z.string();
         await this.cacheService.set(
           `socket:${decoded.subject}`,
-          socket.id,
+          `${socket.id}$$${this.appVariables.serverId}`,
           socketCacheSchema,
         );
         socket.tokenId = decoded.jti;
@@ -74,8 +94,12 @@ export class ChatGateway implements OnGatewayInit,OnGatewayConnection,OnGatewayD
   private readonly server:Server;
   @SubscribeMessage('message')
   handleMessage(client: Socket, payload: {to:string,message:string}): void {
-    this.logger.log(payload);
-    client.to(payload.to).emit('server',payload.message);
+    const to = payload.to.split('$');
+    if (to[1] != this.appVariables.serverId) {
+      this.nats.emit('message.server1',payload);
+      this.logger.log('message sent in other server')
+    };
+    client.to(to[0]).emit('server',payload.message);
     return;
   }
 }

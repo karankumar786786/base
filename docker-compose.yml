@@ -19,6 +19,13 @@ services:
       - "8001:8001"
     volumes:
       - redis_data:/data:rw
+  
+  nats:
+    image: nats:latest
+    container_name: nats-server
+    ports:
+      - '4222:4222'
+      - '8222:8222'
 volumes:
   base:
   redis_data:

@@ -1,13 +1,17 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnApplicationShutdown } from '@nestjs/common';
 import { Redis } from 'ioredis';
 import { ZodSchema } from 'zod';
 
 @Injectable()
-export class CacheService {
+export class CacheService implements OnApplicationShutdown {
     private readonly cache: Redis;
 
     constructor() {
         this.cache = new Redis(String(process.env.CACHE_URL));
+    }
+
+    async onApplicationShutdown(signal?: string) {
+        await this.cache.quit();
     }
 
     async set<T>(key: string, data: T, schema?: ZodSchema<T>): Promise<void> {
